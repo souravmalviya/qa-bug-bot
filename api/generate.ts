@@ -4,7 +4,7 @@ import { GoogleGenAI, Type } from '@google/genai';
 // Simple in-memory rate limiter (per serverless instance)
 const rateLimit = new Map<string, { count: number; resetTime: number }>();
 const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
-const RATE_LIMIT_MAX_REQUESTS = 20;   // max requests per window per IP
+const RATE_LIMIT_MAX_REQUESTS = 30;   // generous limit per IP per minute
 
 function isRateLimited(ip: string): boolean {
   const now = Date.now();
@@ -18,6 +18,9 @@ function isRateLimited(ip: string): boolean {
   entry.count++;
   return entry.count > RATE_LIMIT_MAX_REQUESTS;
 }
+
+// Pick the best available model. The free-tier Gemini key works with these.
+const GEMINI_MODEL = 'gemini-3-flash-preview';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // CORS headers
@@ -37,11 +40,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const timestamp = new Date().toISOString();
 
-  // Rate limiting
+  // Rate limiting (our own, not Gemini's)
   const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || 'unknown';
   if (isRateLimited(clientIp)) {
     console.warn(`[${timestamp}] Rate limited IP: ${clientIp}`);
-    return res.status(429).json({ error: 'Too many requests. Please wait a minute and try again.' });
+    return res.status(429).json({ error: 'Too many requests from your IP. Please wait a minute and try again.' });
   }
 
   try {
@@ -68,15 +71,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
       console.error(`[${timestamp}] GEMINI_API_KEY is not configured`);
-      return res.status(500).json({ error: 'Server misconfiguration: API key not set' });
+      return res.status(500).json({ error: 'Server misconfiguration: GEMINI_API_KEY environment variable is not set. Add it in Vercel Dashboard → Settings → Environment Variables.' });
     }
+
+    // Log a masked version of the key for debugging
+    console.log(`[${timestamp}] Using API key: ${apiKey.substring(0, 8)}...${apiKey.substring(apiKey.length - 4)}`);
 
     const ai = new GoogleGenAI({ apiKey });
 
     if (action === 'bug-report') {
-      console.log(`[${timestamp}] Generating bug report`);
+      console.log(`[${timestamp}] Generating bug report with model: ${GEMINI_MODEL}`);
       const response = await ai.models.generateContent({
-        model: 'gemini-2.0-flash',
+        model: GEMINI_MODEL,
         contents: `Transform this brief bug description into a structured report: "${input}"`,
         config: {
           systemInstruction:
@@ -102,9 +108,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (action === 'bdd-steps') {
-      console.log(`[${timestamp}] Generating BDD scenario`);
+      console.log(`[${timestamp}] Generating BDD scenario with model: ${GEMINI_MODEL}`);
       const response = await ai.models.generateContent({
-        model: 'gemini-2.0-flash',
+        model: GEMINI_MODEL,
         contents: `Generate a Gherkin BDD scenario for this feature: "${input}"`,
         config: {
           systemInstruction:
@@ -136,20 +142,48 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(200).send(response.text ?? '');
     }
   } catch (err: any) {
-    console.error(`[${timestamp}] Server Error:`, err);
+    console.error(`[${timestamp}] Server Error:`, JSON.stringify({
+      message: err.message,
+      status: err.status,
+      statusText: err.statusText,
+      name: err.name,
+      stack: err.stack?.substring(0, 500),
+    }));
 
-    // Detect Gemini API rate-limit / quota errors
-    const isGeminiRateLimit =
+    // Detect Gemini API rate-limit / quota errors specifically
+    const isQuotaError =
       err.status === 429 ||
       err.message?.includes('RESOURCE_EXHAUSTED') ||
-      err.message?.includes('quota');
+      err.message?.includes('quota') ||
+      err.message?.includes('429');
 
-    if (isGeminiRateLimit) {
+    if (isQuotaError) {
       return res.status(429).json({
-        error: 'Gemini API rate limit exceeded. Please wait a minute and try again.',
+        error: 'Gemini API quota exceeded. The free tier allows ~15 requests/minute. Please wait 60 seconds and try again, or use a paid API key.',
+        details: err.message,
       });
     }
 
-    return res.status(500).json({ error: err.message || 'Internal Server Error' });
+    // Check for invalid API key
+    if (err.status === 400 || err.status === 403 || err.message?.includes('API_KEY_INVALID') || err.message?.includes('PERMISSION_DENIED')) {
+      return res.status(500).json({
+        error: 'Invalid or unauthorized Gemini API key. Please check your key in Vercel environment variables.',
+        details: err.message,
+      });
+    }
+
+    // Check for model not found
+    if (err.status === 404 || err.message?.includes('not found') || err.message?.includes('NOT_FOUND')) {
+      return res.status(500).json({
+        error: `Model "${GEMINI_MODEL}" not available for your API key. Check Google AI Studio for available models.`,
+        details: err.message,
+      });
+    }
+
+    // Generic error with actual details
+    return res.status(500).json({
+      error: 'Failed to generate content. See details for more info.',
+      details: err.message || 'Unknown error',
+    });
   }
 }

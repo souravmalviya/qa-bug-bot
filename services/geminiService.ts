@@ -2,10 +2,10 @@ import { BugReport, BDDScenario } from "../types";
 
 const API_ENDPOINT = '/api/generate';
 
-// Helper: fetch with 30s timeout
+// Helper: fetch with 60s timeout (Gemini can be slow on free tier)
 const fetchWithTimeout = async (url: string, body: Record<string, unknown>) => {
   const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), 30000);
+  const id = setTimeout(() => controller.abort(), 60000);
   try {
     const response = await fetch(url, {
       method: 'POST',
@@ -19,21 +19,38 @@ const fetchWithTimeout = async (url: string, body: Record<string, unknown>) => {
   }
 };
 
+// Parse error response from the API
+async function parseErrorResponse(response: Response): Promise<string> {
+  try {
+    const body = await response.text();
+    // Try to parse as JSON to get the detailed error
+    try {
+      const json = JSON.parse(body);
+      // Show details if available, otherwise show error
+      if (json.details) {
+        return `${json.error} (${json.details})`;
+      }
+      return json.error || body;
+    } catch {
+      return body || `Server returned ${response.status}`;
+    }
+  } catch {
+    return `Server returned ${response.status}`;
+  }
+}
+
 export async function generateBugReport(input: string): Promise<BugReport> {
   let response;
   try {
     response = await fetchWithTimeout(API_ENDPOINT, { action: 'bug-report', input });
   } catch (err: any) {
-    if (err.name === 'AbortError') throw new Error("Request timed out. Please try again.");
+    if (err.name === 'AbortError') throw new Error("Request timed out. The AI is taking too long. Please try again.");
     throw new Error("Network error. Please check your connection and try again.");
   }
 
   if (!response.ok) {
-    const errorBody = await response.text();
-    if (response.status === 429) {
-      throw new Error('Rate limit exceeded. Please wait a minute and try again.');
-    }
-    throw new Error(`Server returned ${response.status}: ${errorBody}`);
+    const errorMessage = await parseErrorResponse(response);
+    throw new Error(errorMessage);
   }
 
   const text = await response.text();
@@ -46,16 +63,13 @@ export async function generateBDDSteps(input: string): Promise<BDDScenario> {
   try {
     response = await fetchWithTimeout(API_ENDPOINT, { action: 'bdd-steps', input });
   } catch (err: any) {
-    if (err.name === 'AbortError') throw new Error("Request timed out. Please try again.");
+    if (err.name === 'AbortError') throw new Error("Request timed out. The AI is taking too long. Please try again.");
     throw new Error("Network error. Please check your connection and try again.");
   }
 
   if (!response.ok) {
-    const errorBody = await response.text();
-    if (response.status === 429) {
-      throw new Error('Rate limit exceeded. Please wait a minute and try again.');
-    }
-    throw new Error(`Server returned ${response.status}: ${errorBody}`);
+    const errorMessage = await parseErrorResponse(response);
+    throw new Error(errorMessage);
   }
 
   const text = await response.text();
