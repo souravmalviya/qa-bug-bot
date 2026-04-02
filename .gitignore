@@ -23,11 +23,10 @@ dist-ssr
 *.sln
 *.sw?
 
-# amplify
-.amplify
-amplify_outputs*
-amplifyconfiguration*
+# Vercel
+.vercel
 
-# environment files
+# Environment files
 .env
 .env.*
+!.env.local.example
