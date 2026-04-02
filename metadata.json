@@ -1,0 +1,5 @@
+{
+  "name": "Onclusive QA Bugbot",
+  "description": "A modern, intelligent QA assistant for bug reporting and BDD scenario generation.",
+  "requestFramePermissions": []
+}

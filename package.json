@@ -1,0 +1,41 @@
+{
+  "name": "onclusive-qa-bugbot",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently \"vite\" \"tsx --tsconfig tsconfig-server.json local-server.ts\"",
+    "build": "vite build",
+    "lint": "tsc --noEmit",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@google/genai": "^1.41.0",
+    "aws-amplify": "^6.16.2",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4"
+  },
+  "devDependencies": {
+    "@aws-amplify/backend": "^1.21.0",
+    "@aws-amplify/backend-cli": "^1.8.2",
+    "@tailwindcss/vite": "^4.2.1",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/http-proxy-middleware": "^0.19.3",
+    "@types/node": "^22.14.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "aws-cdk-lib": "^2.234.1",
+    "concurrently": "^9.2.1",
+    "constructs": "^10.5.1",
+    "cors": "^2.8.6",
+    "dotenv": "^17.3.1",
+    "esbuild": "^0.27.3",
+    "express": "^5.2.1",
+    "http-proxy-middleware": "^3.0.5",
+    "tailwindcss": "^4.2.1",
+    "tsconfig-paths": "^4.2.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vite": "^6.2.0"
+  }
+}
