@@ -6,38 +6,88 @@ const rateLimit = new Map<string, { count: number; resetTime: number }>();
 const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
 const RATE_LIMIT_MAX_REQUESTS = 30;   // generous limit per IP per minute
 
+// ─── Retry Configuration (tuned for Vercel's 30s function timeout) ───────────
+// Total time budget: 25s (leaves 5s headroom for cold-start + response serialization)
+// Max retries: 3  → delays of ~500ms, ~1s, ~2s (with jitter) = ~3.5s worst-case wait
+// Per-call timeout: 8s via AbortController so one slow call can't eat the budget
+const RETRY_CONFIG = {
+  maxRetries: 3,
+  /** Base delay in ms; actual delay = base * 2^attempt + random jitter */
+  baseDelayMs: 500,
+  /** Hard ceiling for the entire retry loop (ms). Must be < Vercel timeout. */
+  timeBudgetMs: 25_000,
+  /** Max time a single Gemini API call is allowed before we abort it (ms). */
+  perCallTimeoutMs: 8_000,
+};
+
 /**
- * Wraps an async Gemini API call with automatic retry and exponential backoff.
- * Handles 503 UNAVAILABLE errors that occur during high demand.
- * 
- * @param generateFn A function that returns the Promise from `ai.models.generateContent()`
- * @param maxRetries Maximum number of retries before failing (default: 5)
+ * Wraps a Gemini API call with automatic retry + exponential backoff.
+ *
+ * Design decisions for serverless (Vercel):
+ *  • Short delays with jitter so concurrent invocations don't all retry at
+ *    the exact same instant (thundering-herd avoidance).
+ *  • A hard time-budget ensures we ALWAYS respond before Vercel kills us.
+ *  • Per-call AbortController timeout prevents a single hanging request from
+ *    consuming the entire budget.
+ *  • Only 503 / UNAVAILABLE errors trigger retries; everything else throws
+ *    immediately so the caller's catch block can return the right HTTP status.
+ *
+ * @param generateFn  A zero-arg async function that calls `ai.models.generateContent()`
+ * @param maxRetries  Override the default retry count (default: 3)
  */
-async function generateContentWithRetry<T>(generateFn: () => Promise<T>, maxRetries = 5): Promise<T> {
+async function generateContentWithRetry<T>(
+  generateFn: () => Promise<T>,
+  maxRetries = RETRY_CONFIG.maxRetries,
+): Promise<T> {
+  const deadline = Date.now() + RETRY_CONFIG.timeBudgetMs;
   let attempt = 0;
-  
+
   while (true) {
+    // ── Guard: bail out if we're about to exceed the time budget ──
+    const remaining = deadline - Date.now();
+    if (remaining < 2_000) {
+      // Less than 2s left – not enough time for another attempt + response
+      throw Object.assign(new Error('503 UNAVAILABLE – retry budget exhausted'), { status: 503 });
+    }
+
     try {
-      return await generateFn();
+      // Race the actual API call against a per-call timeout
+      return await Promise.race([
+        generateFn(),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(Object.assign(new Error('Gemini call timed out'), { status: 503 })),
+            Math.min(RETRY_CONFIG.perCallTimeoutMs, remaining - 1_000),
+          ),
+        ),
+      ]);
     } catch (error: any) {
-      const is503Error = 
-        error.status === 503 || 
-        error.message?.includes('503') || 
-        error.message?.includes('UNAVAILABLE') || 
+      // ── Determine if this is a retryable 503 error ──
+      const is503 =
+        error.status === 503 ||
+        error.message?.includes('503') ||
+        error.message?.includes('UNAVAILABLE') ||
         error.message?.includes('high demand');
-      
-      if (is503Error && attempt < maxRetries) {
-        attempt++;
-        // Calculate delay: 1000ms -> 2000ms -> 4000ms -> 8000ms -> 16000ms
-        const backoffDelay = 1000 * Math.pow(2, attempt - 1);
-        console.warn(`[Retry] 503 UNAVAILABLE. Retrying attempt ${attempt}/${maxRetries} in ${backoffDelay}ms...`);
-        
-        // Wait asynchronously without blocking the event loop
-        await new Promise(resolve => setTimeout(resolve, backoffDelay));
-      } else {
-        // If it's not a 503 error OR we've exhausted all retries, throw the error
+
+      if (!is503 || attempt >= maxRetries) {
+        // Non-retryable error OR we've used all our retries → surface it
         throw error;
       }
+
+      attempt++;
+
+      // Exponential delay: 500ms → 1000ms → 2000ms  (+ up to 300ms random jitter)
+      const backoff = RETRY_CONFIG.baseDelayMs * Math.pow(2, attempt - 1);
+      const jitter = Math.floor(Math.random() * 300);
+      const delay = Math.min(backoff + jitter, remaining - 2_000); // never exceed budget
+
+      console.warn(
+        `[Retry] 503 UNAVAILABLE – attempt ${attempt}/${maxRetries} in ${delay}ms ` +
+        `(${Math.round((deadline - Date.now()) / 1000)}s remaining)`,
+      );
+
+      // Async sleep – does NOT block the event loop
+      await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
 }
