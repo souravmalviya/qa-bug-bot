@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { BugReport } from '../types';
-import { generateBugReport } from '../services/geminiService';
+import { generateBugReport } from '../services/aiService';
 
 const BugForm: React.FC = () => {
   const [input, setInput] = useState('');

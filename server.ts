@@ -2,16 +2,16 @@
  * Local development API server
  * 
  * This is a lightweight Express server that mimics Vercel's serverless
- * function routing for local development. It loads your Gemini API key
+ * function routing for local development. It loads your OpenRouter API key
  * from .env.local and serves the /api/generate endpoint.
  * 
- * Usage: npm run dev:local
+ * Usage: npm run dev
  * (runs this server on port 3001 + Vite on port 3000 concurrently)
  */
 
 import express from 'express';
 import dotenv from 'dotenv';
-import { GoogleGenAI, Type } from '@google/genai';
+import { OpenRouter } from '@openrouter/sdk';
 
 // Load .env.local
 dotenv.config({ path: '.env.local' });
@@ -19,8 +19,56 @@ dotenv.config({ path: '.env.local' });
 const app = express();
 app.use(express.json());
 
-const GEMINI_MODEL = 'gemini-3-flash-preview';
+const OPENROUTER_MODEL = 'openai/gpt-5.2';
 const PORT = 3001;
+
+// ─── JSON Schema definitions ────────────────────────────────────────────────
+
+const BUG_REPORT_SCHEMA = {
+  name: 'bug_report',
+  strict: true,
+  schema: {
+    type: 'object' as const,
+    properties: {
+      summary: { type: 'string' },
+      stepsToReproduce: { type: 'array', items: { type: 'string' } },
+      expectedResult: { type: 'string' },
+      actualResult: { type: 'string' },
+      severity: { type: 'string', enum: ['Low', 'Medium', 'High', 'Critical'] },
+      category: { type: 'string' },
+    },
+    required: ['summary', 'stepsToReproduce', 'expectedResult', 'actualResult', 'severity', 'category'],
+    additionalProperties: false,
+  },
+};
+
+const BDD_SCENARIO_SCHEMA = {
+  name: 'bdd_scenario',
+  strict: true,
+  schema: {
+    type: 'object' as const,
+    properties: {
+      feature: { type: 'string' },
+      scenario: { type: 'string' },
+      steps: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            keyword: { type: 'string', enum: ['Given', 'When', 'Then', 'And'] },
+            text: { type: 'string' },
+          },
+          required: ['keyword', 'text'],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ['feature', 'scenario', 'steps'],
+    additionalProperties: false,
+  },
+};
+
+// ─── API Route ──────────────────────────────────────────────────────────────
 
 app.post('/api/generate', async (req, res) => {
   const timestamp = new Date().toISOString();
@@ -42,90 +90,85 @@ app.post('/api/generate', async (req, res) => {
       return res.status(400).json({ error: `Unknown action: ${action}` });
     }
 
-    const apiKey = process.env.GEMINI_API_KEY;
+    const apiKey = process.env.OPENROUTER_API_KEY;
     if (!apiKey) {
-      console.error(`[${timestamp}] ❌ GEMINI_API_KEY not found in .env.local`);
+      console.error(`[${timestamp}] ❌ OPENROUTER_API_KEY not found in .env.local`);
       return res.status(500).json({ 
-        error: 'GEMINI_API_KEY not set. Create a .env.local file with: GEMINI_API_KEY=your_key_here' 
+        error: 'OPENROUTER_API_KEY not set. Create a .env.local file with: OPENROUTER_API_KEY=your_key_here' 
       });
     }
 
-    console.log(`[${timestamp}] Using key: ${apiKey.substring(0, 8)}...`);
-    const ai = new GoogleGenAI({ apiKey });
+    console.log(`[${timestamp}] Using key: ${apiKey.substring(0, 10)}...`);
+    const client = new OpenRouter({ apiKey });
 
     if (action === 'bug-report') {
       console.log(`[${timestamp}] 🐛 Generating bug report...`);
-      const response = await ai.models.generateContent({
-        model: GEMINI_MODEL,
-        contents: `Transform this brief bug description into a structured report: "${input}"`,
-        config: {
-          systemInstruction:
-            'You are an expert QA Engineer at Onclusive. Generate a structured bug report. The summary must be 12 words or less. Be precise and professional.',
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              summary: { type: Type.STRING },
-              stepsToReproduce: { type: Type.ARRAY, items: { type: Type.STRING } },
-              expectedResult: { type: Type.STRING },
-              actualResult: { type: Type.STRING },
-              severity: { type: Type.STRING, enum: ['Low', 'Medium', 'High', 'Critical'] },
-              category: { type: Type.STRING },
+      const response = await client.chat.send({
+        chatRequest: {
+          model: OPENROUTER_MODEL,
+          messages: [
+            {
+              role: 'system',
+              content: 'You are an expert QA Engineer at Onclusive. Generate a structured bug report. The summary must be 12 words or less. Be precise and professional.',
             },
-            required: ['summary', 'stepsToReproduce', 'expectedResult', 'actualResult', 'severity', 'category'],
+            {
+              role: 'user',
+              content: `Transform this brief bug description into a structured report: "${input}"`,
+            },
+          ],
+          stream: false,
+          maxTokens: 2000,
+          responseFormat: {
+            type: 'json_schema',
+            jsonSchema: BUG_REPORT_SCHEMA,
           },
         },
       });
+      const content = (response as any).choices?.[0]?.message?.content ?? '';
       console.log(`[${timestamp}] ✅ Bug report generated`);
-      return res.send(response.text ?? '');
+      return res.send(content);
     }
 
     if (action === 'bdd-steps') {
       console.log(`[${timestamp}] 📋 Generating BDD scenario...`);
-      const response = await ai.models.generateContent({
-        model: GEMINI_MODEL,
-        contents: `Generate a Gherkin BDD scenario for this feature: "${input}"`,
-        config: {
-          systemInstruction:
-            'You are an expert Business Analyst and QA Specialist. Convert the input into a professional Gherkin BDD scenario. Ensure the feature and scenario names are descriptive. Use standard Given/When/Then/And keywords.',
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              feature: { type: Type.STRING },
-              scenario: { type: Type.STRING },
-              steps: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    keyword: { type: Type.STRING, enum: ['Given', 'When', 'Then', 'And'] },
-                    text: { type: Type.STRING },
-                  },
-                  required: ['keyword', 'text'],
-                },
-              },
+      const response = await client.chat.send({
+        chatRequest: {
+          model: OPENROUTER_MODEL,
+          messages: [
+            {
+              role: 'system',
+              content: 'You are an expert Business Analyst and QA Specialist. Convert the input into a professional Gherkin BDD scenario. Ensure the feature and scenario names are descriptive. Use standard Given/When/Then/And keywords.',
             },
-            required: ['feature', 'scenario', 'steps'],
+            {
+              role: 'user',
+              content: `Generate a Gherkin BDD scenario for this feature: "${input}"`,
+            },
+          ],
+          stream: false,
+          maxTokens: 2000,
+          responseFormat: {
+            type: 'json_schema',
+            jsonSchema: BDD_SCENARIO_SCHEMA,
           },
         },
       });
+      const content = (response as any).choices?.[0]?.message?.content ?? '';
       console.log(`[${timestamp}] ✅ BDD scenario generated`);
-      return res.send(response.text ?? '');
+      return res.send(content);
     }
   } catch (err: any) {
     console.error(`[${timestamp}] ❌ Error:`, err.message);
 
-    if (err.status === 429 || err.message?.includes('RESOURCE_EXHAUSTED') || err.message?.includes('quota')) {
+    if (err.status === 429 || err.message?.includes('rate limit')) {
       return res.status(429).json({
-        error: 'Gemini API quota exceeded. Free tier: ~15 requests/min. Wait 60 seconds.',
+        error: 'API rate limit reached. Please wait a moment and try again.',
         details: err.message,
       });
     }
 
-    if (err.status === 400 || err.status === 403 || err.message?.includes('API_KEY_INVALID')) {
+    if (err.status === 401 || err.status === 403 || err.message?.includes('API key')) {
       return res.status(500).json({
-        error: 'Invalid Gemini API key. Get a new one at https://aistudio.google.com/apikey',
+        error: 'Invalid OpenRouter API key. Check your .env.local file.',
         details: err.message,
       });
     }
@@ -141,15 +184,15 @@ app.post('/api/generate', async (req, res) => {
 app.get('/api/health', (_req, res) => {
   res.json({ 
     status: 'ok', 
-    hasApiKey: !!process.env.GEMINI_API_KEY,
-    model: GEMINI_MODEL,
+    hasApiKey: !!process.env.OPENROUTER_API_KEY,
+    model: OPENROUTER_MODEL,
   });
 });
 
 const server = app.listen(PORT, '127.0.0.1', () => {
   console.log(`\n🚀 Local API server running at http://127.0.0.1:${PORT}`);
   console.log(`   Health check: http://127.0.0.1:${PORT}/api/health`);
-  console.log(`   API key loaded: ${process.env.GEMINI_API_KEY ? '✅ Yes' : '❌ No (check .env.local)'}\n`);
+  console.log(`   API key loaded: ${process.env.OPENROUTER_API_KEY ? '✅ Yes' : '❌ No (check .env.local)'}\n`);
 });
 
 ['SIGINT', 'SIGTERM'].forEach(signal => {

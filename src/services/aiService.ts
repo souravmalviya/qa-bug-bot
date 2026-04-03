@@ -15,9 +15,9 @@ const FRIENDLY_ERRORS: Record<number, string> = {
 const DEFAULT_ERROR = "Something went wrong. Please try again.";
 
 // ─── Fetch helper with timeout and client-side retry ─────────────────────────
-// The backend already retries against Gemini, but if the *entire function* times
-// out on Vercel (e.g. cold-start + slow model) the client gets a generic error.
-// We do ONE transparent client-side retry for 503/429 responses only.
+// The backend already retries against OpenRouter, but if the *entire function*
+// times out on Vercel (e.g. cold-start + slow model) the client gets a generic
+// error. We do ONE transparent client-side retry for 503/429 responses only.
 
 async function fetchWithRetry(
   url: string,

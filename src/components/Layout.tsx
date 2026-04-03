@@ -151,11 +151,14 @@ const Layout: React.FC<LayoutProps> = ({ children, onNavigate, currentView }) =>
       </main>
 
       <footer className="border-t border-gray-100 bg-white py-12">
-        <div className="max-w-7xl mx-auto px-4 text-center">
+        <div className="max-w-7xl mx-auto px-4 text-center space-y-3">
           <p className="text-slate-400 text-sm">
-            © 2026 Onclusive QA Bugbot. Empowering quality through Ai-intelligence.
+            © 2026 Onclusive QA Bugbot. Empowering quality through AI-intelligence.
           </p>
-          <p className="text-slate-500 text-xs mt-2 font-medium">
+          <p className="text-slate-300 text-xs">
+            Powered by <span className="font-medium text-slate-400">GPT-5.2</span> via <span className="font-medium text-slate-400">OpenRouter</span>
+          </p>
+          <p className="text-slate-500 text-xs font-medium">
             Created with ❤️ By Sourav Malviya
           </p>
         </div>

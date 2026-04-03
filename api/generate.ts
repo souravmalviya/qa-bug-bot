@@ -1,71 +1,38 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { GoogleGenAI, Type } from '@google/genai';
+import { OpenRouter } from '@openrouter/sdk';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
-const GEMINI_MODEL = 'gemini-3-flash-preview';
+const OPENROUTER_MODEL = 'openai/gpt-5.2';
 
-// ─── Singleton Gemini client (reused across requests in the same instance) ───
-// Creating the client once avoids repeated SDK initialisation overhead.
-let _aiClient: GoogleGenAI | null = null;
-function getAIClient(): GoogleGenAI {
-  if (!_aiClient) {
-    const apiKey = process.env.GEMINI_API_KEY;
+// ─── Singleton OpenRouter client (reused across requests in the same instance) ─
+let _client: OpenRouter | null = null;
+function getClient(): OpenRouter {
+  if (!_client) {
+    const apiKey = process.env.OPENROUTER_API_KEY;
     if (!apiKey) {
-      throw new Error('GEMINI_API_KEY is not configured');
+      throw new Error('OPENROUTER_API_KEY is not configured');
     }
-    _aiClient = new GoogleGenAI({ apiKey });
+    _client = new OpenRouter({ apiKey });
   }
-  return _aiClient;
-}
-
-// ─── Per-IP Rate Limiter ─────────────────────────────────────────────────────
-// Gemini free tier: 15 RPM *per API key* (shared across ALL users).
-// We cap each IP to 10 RPM so that a single user can never exhaust the full
-// key quota, leaving room for other concurrent users.
-const rateLimit = new Map<string, { count: number; resetTime: number }>();
-const RATE_LIMIT_WINDOW_MS = 60_000;
-const RATE_LIMIT_MAX_REQUESTS = 10;
-
-function isRateLimited(ip: string): boolean {
-  const now = Date.now();
-  const entry = rateLimit.get(ip);
-
-  if (!entry || now > entry.resetTime) {
-    rateLimit.set(ip, { count: 1, resetTime: now + RATE_LIMIT_WINDOW_MS });
-    return false;
-  }
-
-  entry.count++;
-  return entry.count > RATE_LIMIT_MAX_REQUESTS;
+  return _client;
 }
 
 // ─── Retry Configuration (tuned for Vercel Hobby 30 s timeout) ──────────────
-// Gemini free-tier structured JSON calls regularly take 10–15 s, so each call
-// needs a generous timeout.  With 2 retries (3 total attempts) the worst-case
-// timeline is:  call₁ 12 s + 1 s wait + call₂ 11 s = 24 s  (within budget).
 const RETRY_CONFIG = {
   maxRetries: 2,
-  baseDelayMs: 1_000,        // 1 s → 2 s between retries
-  timeBudgetMs: 25_000,      // hard ceiling (leaves 5 s headroom for Vercel)
-  perCallTimeoutMs: 12_000,  // free-tier calls can legitimately take 10–15 s
+  baseDelayMs: 1_000,
+  timeBudgetMs: 25_000,
+  perCallTimeoutMs: 15_000,
 };
 
 /**
- * Retry wrapper for Gemini API calls.
+ * Retry wrapper for OpenRouter API calls.
  *
- * Retries on:
- *  - 503  UNAVAILABLE  (model overloaded / high demand)
- *  - 429  RESOURCE_EXHAUSTED  (rate limit hit — resets within seconds)
- *
- * Every other error is thrown immediately (400, 403, 404 etc.).
- *
- * Safety features for serverless:
- *  • 25 s hard time-budget so we always respond before Vercel kills us.
- *  • Per-call timeout via Promise.race prevents one slow call from eating the budget.
- *  • Random jitter avoids thundering-herd when many retries fire simultaneously.
+ * Retries on transient 5xx / 429 errors only.
+ * All other errors (400, 403, 404 etc.) are thrown immediately.
  */
-async function generateContentWithRetry<T>(
-  generateFn: () => Promise<T>,
+async function callWithRetry<T>(
+  callFn: () => Promise<T>,
   maxRetries = RETRY_CONFIG.maxRetries,
 ): Promise<T> {
   const deadline = Date.now() + RETRY_CONFIG.timeBudgetMs;
@@ -74,7 +41,6 @@ async function generateContentWithRetry<T>(
   while (true) {
     const remaining = deadline - Date.now();
 
-    // Not enough time for another attempt — fail fast
     if (remaining < 2_000) {
       throw Object.assign(
         new Error('Service temporarily unavailable — retry budget exhausted'),
@@ -83,26 +49,22 @@ async function generateContentWithRetry<T>(
     }
 
     try {
-      // Race the API call against a per-call timeout
       return await Promise.race([
-        generateFn(),
+        callFn(),
         new Promise<never>((_, reject) =>
           setTimeout(
-            () => reject(Object.assign(new Error('Gemini call timed out'), { status: 503 })),
+            () => reject(Object.assign(new Error('API call timed out'), { status: 503 })),
             Math.min(RETRY_CONFIG.perCallTimeoutMs, remaining - 1_000),
           ),
         ),
       ]);
     } catch (error: any) {
-      // Determine if this is a retryable transient error
       const isRetryable =
         error.status === 503 ||
+        error.status === 502 ||
         error.status === 429 ||
         error.message?.includes('503') ||
         error.message?.includes('429') ||
-        error.message?.includes('UNAVAILABLE') ||
-        error.message?.includes('RESOURCE_EXHAUSTED') ||
-        error.message?.includes('high demand') ||
         error.message?.includes('overloaded');
 
       if (!isRetryable || attempt >= maxRetries) {
@@ -110,8 +72,6 @@ async function generateContentWithRetry<T>(
       }
 
       attempt++;
-
-      // Exponential backoff: 500 ms → 1 s → 2 s  (+  up to 500 ms random jitter)
       const backoff = RETRY_CONFIG.baseDelayMs * Math.pow(2, attempt - 1);
       const jitter = Math.floor(Math.random() * 500);
       const delay = Math.min(backoff + jitter, remaining - 2_000);
@@ -126,41 +86,77 @@ async function generateContentWithRetry<T>(
   }
 }
 
-// ─── Request Queue ───────────────────────────────────────────────────────────
-// Serialise Gemini calls from the same serverless instance so we don't send
-// multiple concurrent requests that would immediately trip the 15 RPM limit.
-let _queue: Promise<any> = Promise.resolve();
+// ─── JSON Schema definitions for structured output ──────────────────────────
 
-function enqueue<T>(fn: () => Promise<T>): Promise<T> {
-  const p = _queue.then(fn, fn);   // run fn whether previous resolved or rejected
-  _queue = p.catch(() => {});      // swallow so the chain doesn't break
-  return p;
-}
+const BUG_REPORT_SCHEMA = {
+  name: 'bug_report',
+  strict: true,
+  schema: {
+    type: 'object' as const,
+    properties: {
+      summary: { type: 'string' },
+      stepsToReproduce: { type: 'array', items: { type: 'string' } },
+      expectedResult: { type: 'string' },
+      actualResult: { type: 'string' },
+      severity: { type: 'string', enum: ['Low', 'Medium', 'High', 'Critical'] },
+      category: { type: 'string' },
+    },
+    required: ['summary', 'stepsToReproduce', 'expectedResult', 'actualResult', 'severity', 'category'],
+    additionalProperties: false,
+  },
+};
+
+const BDD_SCENARIO_SCHEMA = {
+  name: 'bdd_scenario',
+  strict: true,
+  schema: {
+    type: 'object' as const,
+    properties: {
+      feature: { type: 'string', description: 'The high-level feature name.' },
+      scenario: { type: 'string', description: 'The specific scenario being tested.' },
+      steps: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            keyword: { type: 'string', enum: ['Given', 'When', 'Then', 'And'] },
+            text: { type: 'string' },
+          },
+          required: ['keyword', 'text'],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ['feature', 'scenario', 'steps'],
+    additionalProperties: false,
+  },
+};
 
 // ─── Vercel Handler ──────────────────────────────────────────────────────────
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // CORS
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  // ── CORS — restrict to known origins ──
+  const ALLOWED_ORIGINS = [
+    'https://qa-bug-bot.vercel.app',
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+  ];
+  const origin = req.headers.origin ?? '';
+  if (ALLOWED_ORIGINS.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  }
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Cache-Control', 'no-store');
+  res.removeHeader('X-Powered-By');
 
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed. Use POST.' });
   }
 
+  const requestId = crypto.randomUUID().slice(0, 8);
   const timestamp = new Date().toISOString();
-
-  // ── Per-IP rate limiting ──
-  const clientIp =
-    (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || 'unknown';
-  if (isRateLimited(clientIp)) {
-    console.warn(`[${timestamp}] Rate-limited IP: ${clientIp}`);
-    return res.status(429).json({
-      error: 'You are sending too many requests. Please wait a minute and try again.',
-    });
-  }
 
   try {
     const { action, input } = req.body || {};
@@ -176,76 +172,69 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: `Unknown action: "${action}". Use "bug-report" or "bdd-steps".` });
     }
 
-    const ai = getAIClient();
-    console.log(`[${timestamp}] ${action} | input length ${input.length}`);
+    const client = getClient();
+    console.log(`[${requestId}] ${timestamp} | ${action} | ${input.length} chars`);
 
     // ── Bug report generation ──
     if (action === 'bug-report') {
-      const response = await enqueue(() =>
-        generateContentWithRetry(() =>
-          ai.models.generateContent({
-            model: GEMINI_MODEL,
-            contents: `Transform this brief bug description into a structured report: "${input}"`,
-            config: {
-              systemInstruction:
-                'You are an expert QA Engineer at Onclusive. Generate a structured bug report. The summary must be 12 words or less. Be precise and professional.',
-              responseMimeType: 'application/json',
-              responseSchema: {
-                type: Type.OBJECT,
-                properties: {
-                  summary: { type: Type.STRING },
-                  stepsToReproduce: { type: Type.ARRAY, items: { type: Type.STRING } },
-                  expectedResult: { type: Type.STRING },
-                  actualResult: { type: Type.STRING },
-                  severity: { type: Type.STRING, enum: ['Low', 'Medium', 'High', 'Critical'] },
-                  category: { type: Type.STRING },
-                },
-                required: ['summary', 'stepsToReproduce', 'expectedResult', 'actualResult', 'severity', 'category'],
+      const response = await callWithRetry(() =>
+        client.chat.send({
+          chatRequest: {
+            model: OPENROUTER_MODEL,
+            messages: [
+              {
+                role: 'system',
+                content: 'You are an expert QA Engineer at Onclusive. Generate a structured bug report. The summary must be 12 words or less. Be precise and professional.',
               },
+              {
+                role: 'user',
+                content: `Transform this brief bug description into a structured report: "${input}"`,
+              },
+            ],
+            stream: false,
+            maxTokens: 2000,
+            responseFormat: {
+              type: 'json_schema',
+              jsonSchema: BUG_REPORT_SCHEMA,
             },
-          }),
-        ),
+          },
+        }),
       );
+
+      const content = (response as any).choices?.[0]?.message?.content ?? '';
       console.log(`[${timestamp}] Bug report generated OK`);
-      return res.status(200).send(response.text ?? '');
+      return res.status(200).send(content);
     }
 
     // ── BDD scenario generation ──
     if (action === 'bdd-steps') {
-      const response = await enqueue(() =>
-        generateContentWithRetry(() =>
-          ai.models.generateContent({
-            model: GEMINI_MODEL,
-            contents: `Generate a Gherkin BDD scenario for this feature: "${input}"`,
-            config: {
-              systemInstruction:
-                'You are an expert Business Analyst and QA Specialist. Convert the input into a professional Gherkin BDD scenario. Ensure the feature and scenario names are descriptive. Use standard Given/When/Then/And keywords.',
-              responseMimeType: 'application/json',
-              responseSchema: {
-                type: Type.OBJECT,
-                properties: {
-                  feature: { type: Type.STRING, description: 'The high-level feature name.' },
-                  scenario: { type: Type.STRING, description: 'The specific scenario being tested.' },
-                  steps: {
-                    type: Type.ARRAY,
-                    items: {
-                      type: Type.OBJECT,
-                      properties: {
-                        keyword: { type: Type.STRING, enum: ['Given', 'When', 'Then', 'And'] },
-                        text: { type: Type.STRING },
-                      },
-                      required: ['keyword', 'text'],
-                    },
-                  },
-                },
-                required: ['feature', 'scenario', 'steps'],
+      const response = await callWithRetry(() =>
+        client.chat.send({
+          chatRequest: {
+            model: OPENROUTER_MODEL,
+            messages: [
+              {
+                role: 'system',
+                content: 'You are an expert Business Analyst and QA Specialist. Convert the input into a professional Gherkin BDD scenario. Ensure the feature and scenario names are descriptive. Use standard Given/When/Then/And keywords.',
               },
+              {
+                role: 'user',
+                content: `Generate a Gherkin BDD scenario for this feature: "${input}"`,
+              },
+            ],
+            stream: false,
+            maxTokens: 2000,
+            responseFormat: {
+              type: 'json_schema',
+              jsonSchema: BDD_SCENARIO_SCHEMA,
             },
-          }),
-        ),
+          },
+        }),
       );
+
+      const content = (response as any).choices?.[0]?.message?.content ?? '';
       console.log(`[${timestamp}] BDD scenario generated OK`);
-      return res.status(200).send(response.text ?? '');
+      return res.status(200).send(content);
     }
   } catch (err: any) {
     console.error(`[${timestamp}] ERROR`, {
@@ -254,43 +243,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       name: err.name,
     });
 
-    // ── Map errors to clean, user-friendly responses ──
-    // Users should NEVER see raw "RESOURCE_EXHAUSTED" or stack traces.
-
     const status = err.status;
     const msg = err.message ?? '';
 
-    // 429 / Quota errors
-    if (
-      status === 429 ||
-      msg.includes('RESOURCE_EXHAUSTED') ||
-      msg.includes('quota') ||
-      msg.includes('429')
-    ) {
+    // 429 / Rate limit
+    if (status === 429 || msg.includes('429') || msg.includes('rate limit')) {
       return res.status(429).json({
         error: 'The AI service is busy right now. Please wait about 30 seconds and try again.',
       });
     }
 
-    // 503 / Overload errors (after retries exhausted)
-    if (
-      status === 503 ||
-      msg.includes('503') ||
-      msg.includes('UNAVAILABLE') ||
-      msg.includes('high demand') ||
-      msg.includes('overloaded')
-    ) {
+    // 503 / Overload (after retries exhausted)
+    if (status === 503 || status === 502 || msg.includes('503') || msg.includes('overloaded')) {
       return res.status(503).json({
         error: 'The AI service is currently experiencing high demand. Please try again in a few seconds.',
       });
     }
 
     // Invalid API key
-    if (
-      status === 400 || status === 403 ||
-      msg.includes('API_KEY_INVALID') ||
-      msg.includes('PERMISSION_DENIED')
-    ) {
+    if (status === 401 || status === 403 || msg.includes('API key') || msg.includes('PERMISSION_DENIED')) {
       return res.status(500).json({
         error: 'Server configuration error. Please contact the administrator.',
       });
@@ -303,8 +274,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
-    // Missing API key (thrown by getAIClient)
-    if (msg.includes('GEMINI_API_KEY is not configured')) {
+    // Missing API key (thrown by getClient)
+    if (msg.includes('OPENROUTER_API_KEY is not configured')) {
       return res.status(500).json({
         error: 'Server configuration error. Please contact the administrator.',
       });

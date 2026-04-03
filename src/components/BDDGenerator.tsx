@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { BDDScenario } from '../types';
-import { generateBDDSteps } from '../services/geminiService';
+import { generateBDDSteps } from '../services/aiService';
 
 const BDDGenerator: React.FC = () => {
   const [input, setInput] = useState('');
