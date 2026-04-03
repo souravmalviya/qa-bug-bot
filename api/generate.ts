@@ -6,6 +6,43 @@ const rateLimit = new Map<string, { count: number; resetTime: number }>();
 const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
 const RATE_LIMIT_MAX_REQUESTS = 30;   // generous limit per IP per minute
 
+/**
+ * Wraps an async Gemini API call with automatic retry and exponential backoff.
+ * Handles 503 UNAVAILABLE errors that occur during high demand.
+ * 
+ * @param generateFn A function that returns the Promise from `ai.models.generateContent()`
+ * @param maxRetries Maximum number of retries before failing (default: 5)
+ */
+async function generateContentWithRetry<T>(generateFn: () => Promise<T>, maxRetries = 5): Promise<T> {
+  let attempt = 0;
+  
+  while (true) {
+    try {
+      return await generateFn();
+    } catch (error: any) {
+      const is503Error = 
+        error.status === 503 || 
+        error.message?.includes('503') || 
+        error.message?.includes('UNAVAILABLE') || 
+        error.message?.includes('high demand');
+      
+      if (is503Error && attempt < maxRetries) {
+        attempt++;
+        // Calculate delay: 1000ms -> 2000ms -> 4000ms -> 8000ms -> 16000ms
+        const backoffDelay = 1000 * Math.pow(2, attempt - 1);
+        console.warn(`[Retry] 503 UNAVAILABLE. Retrying attempt ${attempt}/${maxRetries} in ${backoffDelay}ms...`);
+        
+        // Wait asynchronously without blocking the event loop
+        await new Promise(resolve => setTimeout(resolve, backoffDelay));
+      } else {
+        // If it's not a 503 error OR we've exhausted all retries, throw the error
+        throw error;
+      }
+    }
+  }
+}
+
+
 function isRateLimited(ip: string): boolean {
   const now = Date.now();
   const entry = rateLimit.get(ip);
@@ -81,27 +118,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (action === 'bug-report') {
       console.log(`[${timestamp}] Generating bug report with model: ${GEMINI_MODEL}`);
-      const response = await ai.models.generateContent({
-        model: GEMINI_MODEL,
-        contents: `Transform this brief bug description into a structured report: "${input}"`,
-        config: {
-          systemInstruction:
-            'You are an expert QA Engineer at Onclusive. Generate a structured bug report. The summary must be 12 words or less. Be precise and professional.',
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              summary: { type: Type.STRING },
-              stepsToReproduce: { type: Type.ARRAY, items: { type: Type.STRING } },
-              expectedResult: { type: Type.STRING },
-              actualResult: { type: Type.STRING },
-              severity: { type: Type.STRING, enum: ['Low', 'Medium', 'High', 'Critical'] },
-              category: { type: Type.STRING },
+      const response = await generateContentWithRetry(() =>
+        ai.models.generateContent({
+          model: GEMINI_MODEL,
+          contents: `Transform this brief bug description into a structured report: "${input}"`,
+          config: {
+            systemInstruction:
+              'You are an expert QA Engineer at Onclusive. Generate a structured bug report. The summary must be 12 words or less. Be precise and professional.',
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                summary: { type: Type.STRING },
+                stepsToReproduce: { type: Type.ARRAY, items: { type: Type.STRING } },
+                expectedResult: { type: Type.STRING },
+                actualResult: { type: Type.STRING },
+                severity: { type: Type.STRING, enum: ['Low', 'Medium', 'High', 'Critical'] },
+                category: { type: Type.STRING },
+              },
+              required: ['summary', 'stepsToReproduce', 'expectedResult', 'actualResult', 'severity', 'category'],
             },
-            required: ['summary', 'stepsToReproduce', 'expectedResult', 'actualResult', 'severity', 'category'],
           },
-        },
-      });
+        })
+      );
 
       console.log(`[${timestamp}] Bug report generated successfully`);
       return res.status(200).send(response.text ?? '');
@@ -109,34 +148,36 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (action === 'bdd-steps') {
       console.log(`[${timestamp}] Generating BDD scenario with model: ${GEMINI_MODEL}`);
-      const response = await ai.models.generateContent({
-        model: GEMINI_MODEL,
-        contents: `Generate a Gherkin BDD scenario for this feature: "${input}"`,
-        config: {
-          systemInstruction:
-            'You are an expert Business Analyst and QA Specialist. Convert the input into a professional Gherkin BDD scenario. Ensure the feature and scenario names are descriptive. Use standard Given/When/Then/And keywords.',
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              feature: { type: Type.STRING, description: 'The high-level feature name.' },
-              scenario: { type: Type.STRING, description: 'The specific scenario being tested.' },
-              steps: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    keyword: { type: Type.STRING, enum: ['Given', 'When', 'Then', 'And'] },
-                    text: { type: Type.STRING },
+      const response = await generateContentWithRetry(() =>
+        ai.models.generateContent({
+          model: GEMINI_MODEL,
+          contents: `Generate a Gherkin BDD scenario for this feature: "${input}"`,
+          config: {
+            systemInstruction:
+              'You are an expert Business Analyst and QA Specialist. Convert the input into a professional Gherkin BDD scenario. Ensure the feature and scenario names are descriptive. Use standard Given/When/Then/And keywords.',
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                feature: { type: Type.STRING, description: 'The high-level feature name.' },
+                scenario: { type: Type.STRING, description: 'The specific scenario being tested.' },
+                steps: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      keyword: { type: Type.STRING, enum: ['Given', 'When', 'Then', 'And'] },
+                      text: { type: Type.STRING },
+                    },
+                    required: ['keyword', 'text'],
                   },
-                  required: ['keyword', 'text'],
                 },
               },
+              required: ['feature', 'scenario', 'steps'],
             },
-            required: ['feature', 'scenario', 'steps'],
           },
-        },
-      });
+        })
+      );
 
       console.log(`[${timestamp}] BDD scenario generated successfully`);
       return res.status(200).send(response.text ?? '');
@@ -160,6 +201,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (isQuotaError) {
       return res.status(429).json({
         error: 'Gemini API quota exceeded. The free tier allows ~15 requests/minute. Please wait 60 seconds and try again, or use a paid API key.',
+        details: err.message,
+      });
+    }
+
+    // Detect 503 UNAVAILABLE / High Demand error (passed through if max retries exceeded)
+    const is503Error = 
+      err.status === 503 || 
+      err.message?.includes('503') || 
+      err.message?.includes('UNAVAILABLE') ||
+      err.message?.includes('high demand');
+      
+    if (is503Error) {
+      return res.status(503).json({
+        error: 'The AI service is currently experiencing high demand. Please try again in a few seconds.',
         details: err.message,
       });
     }

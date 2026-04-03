@@ -42,9 +42,8 @@ const Layout: React.FC<LayoutProps> = ({ children, onNavigate, currentView }) =>
     <div className="min-h-screen flex flex-col selection:bg-indigo-500/30">
       {/* Backdrop overlay */}
       <div
-        className={`fixed inset-0 bg-black/20 backdrop-blur-sm z-40 transition-opacity duration-300 md:hidden ${
-          mobileMenuOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
-        }`}
+        className={`fixed inset-0 bg-black/20 backdrop-blur-sm z-40 transition-opacity duration-300 md:hidden ${mobileMenuOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
+          }`}
         onClick={() => setMobileMenuOpen(false)}
       />
 
@@ -73,7 +72,7 @@ const Layout: React.FC<LayoutProps> = ({ children, onNavigate, currentView }) =>
                 className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${currentView === 'bdd'
                   ? 'bg-[#EEF2FF] text-[#4F46E5] shadow-sm'
                   : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-                }`}
+                  }`}
               >
                 BDD Generator
               </button>
@@ -82,7 +81,7 @@ const Layout: React.FC<LayoutProps> = ({ children, onNavigate, currentView }) =>
                 className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${currentView === 'generator'
                   ? 'bg-[#EEF2FF] text-[#4F46E5] shadow-sm'
                   : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-                }`}
+                  }`}
               >
                 Bug Creator
               </button>
@@ -97,19 +96,16 @@ const Layout: React.FC<LayoutProps> = ({ children, onNavigate, currentView }) =>
             >
               <div className="w-5 h-4 flex flex-col justify-between">
                 <span
-                  className={`block h-0.5 w-5 bg-current rounded-full transition-all duration-300 origin-center ${
-                    mobileMenuOpen ? 'rotate-45 translate-y-[7px]' : ''
-                  }`}
+                  className={`block h-0.5 w-5 bg-current rounded-full transition-all duration-300 origin-center ${mobileMenuOpen ? 'rotate-45 translate-y-[7px]' : ''
+                    }`}
                 />
                 <span
-                  className={`block h-0.5 w-5 bg-current rounded-full transition-all duration-200 ${
-                    mobileMenuOpen ? 'opacity-0 scale-x-0' : 'opacity-100'
-                  }`}
+                  className={`block h-0.5 w-5 bg-current rounded-full transition-all duration-200 ${mobileMenuOpen ? 'opacity-0 scale-x-0' : 'opacity-100'
+                    }`}
                 />
                 <span
-                  className={`block h-0.5 w-5 bg-current rounded-full transition-all duration-300 origin-center ${
-                    mobileMenuOpen ? '-rotate-45 -translate-y-[7px]' : ''
-                  }`}
+                  className={`block h-0.5 w-5 bg-current rounded-full transition-all duration-300 origin-center ${mobileMenuOpen ? '-rotate-45 -translate-y-[7px]' : ''
+                    }`}
                 />
               </div>
             </button>
@@ -118,18 +114,16 @@ const Layout: React.FC<LayoutProps> = ({ children, onNavigate, currentView }) =>
 
         {/* Mobile dropdown menu */}
         <div
-          className={`md:hidden overflow-hidden transition-all duration-300 ease-in-out ${
-            mobileMenuOpen ? 'max-h-60 opacity-100' : 'max-h-0 opacity-0'
-          }`}
+          className={`md:hidden overflow-hidden transition-all duration-300 ease-in-out ${mobileMenuOpen ? 'max-h-60 opacity-100' : 'max-h-0 opacity-0'
+            }`}
         >
           <div className="px-4 pb-4 pt-1 space-y-1 border-t border-gray-50">
             <button
               onClick={() => handleMobileNav('bdd')}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-200 ${
-                currentView === 'bdd'
-                  ? 'bg-[#EEF2FF] text-[#4F46E5] shadow-sm'
-                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-              }`}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-200 ${currentView === 'bdd'
+                ? 'bg-[#EEF2FF] text-[#4F46E5] shadow-sm'
+                : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                }`}
             >
               <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
@@ -138,11 +132,10 @@ const Layout: React.FC<LayoutProps> = ({ children, onNavigate, currentView }) =>
             </button>
             <button
               onClick={() => handleMobileNav('generator')}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-200 ${
-                currentView === 'generator'
-                  ? 'bg-[#EEF2FF] text-[#4F46E5] shadow-sm'
-                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-              }`}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-200 ${currentView === 'generator'
+                ? 'bg-[#EEF2FF] text-[#4F46E5] shadow-sm'
+                : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                }`}
             >
               <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4.5c-.77-.833-2.694-.833-3.464 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z" />
