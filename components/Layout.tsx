@@ -26,10 +26,10 @@ const Layout: React.FC<LayoutProps> = ({ children, onNavigate, currentView }) =>
               </div>
               <span className="text-xl font-bold text-[#0F172A] tracking-tight">Onclusive QA</span>
             </div>
-            <div className="hidden md:flex items-center gap-2">
+            <div className="flex items-center gap-1 sm:gap-2">
               <button
                 onClick={() => onNavigate('bdd')}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${currentView === 'bdd'
+                className={`px-2.5 py-1.5 sm:px-4 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all ${currentView === 'bdd'
                   ? 'bg-[#EEF2FF] text-[#4F46E5]'
                   : 'text-slate-600 hover:bg-slate-50'
                   }`}
@@ -38,7 +38,7 @@ const Layout: React.FC<LayoutProps> = ({ children, onNavigate, currentView }) =>
               </button>
               <button
                 onClick={() => onNavigate('generator')}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${currentView === 'generator'
+                className={`px-2.5 py-1.5 sm:px-4 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all ${currentView === 'generator'
                   ? 'bg-[#EEF2FF] text-[#4F46E5]'
                   : 'text-slate-600 hover:bg-slate-50'
                   }`}
