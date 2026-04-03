@@ -40,11 +40,14 @@ function isRateLimited(ip: string): boolean {
 }
 
 // ─── Retry Configuration (tuned for Vercel Hobby 30 s timeout) ──────────────
+// Gemini free-tier structured JSON calls regularly take 10–15 s, so each call
+// needs a generous timeout.  With 2 retries (3 total attempts) the worst-case
+// timeline is:  call₁ 12 s + 1 s wait + call₂ 11 s = 24 s  (within budget).
 const RETRY_CONFIG = {
-  maxRetries: 3,
-  baseDelayMs: 500,          // 500ms → 1s → 2s
-  timeBudgetMs: 25_000,      // hard ceiling (leaves 5 s for cold-start + serialisation)
-  perCallTimeoutMs: 8_000,   // max time each Gemini call gets before we abort
+  maxRetries: 2,
+  baseDelayMs: 1_000,        // 1 s → 2 s between retries
+  timeBudgetMs: 25_000,      // hard ceiling (leaves 5 s headroom for Vercel)
+  perCallTimeoutMs: 12_000,  // free-tier calls can legitimately take 10–15 s
 };
 
 /**
