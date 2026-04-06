@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { Analytics } from "@vercel/analytics/react";
 import { ViewState } from '../types';
 
 interface LayoutProps {
@@ -156,13 +157,14 @@ const Layout: React.FC<LayoutProps> = ({ children, onNavigate, currentView }) =>
             © 2026 Onclusive QA Bugbot. Empowering quality through AI-intelligence.
           </p>
           <p className="text-slate-300 text-xs">
-            Powered by <span className="font-medium text-slate-400">GPT-5.2</span> via <span className="font-medium text-slate-400">OpenRouter</span>
+            Powered by <span className="font-medium text-slate-400">GPT-5.2</span> via <span className="font-medium text-slate-400">OpenAI Api</span>
           </p>
           <p className="text-slate-500 text-xs font-medium">
             Created with ❤️ By Sourav Malviya
           </p>
         </div>
       </footer>
+      <Analytics />
     </div>
   );
 };
