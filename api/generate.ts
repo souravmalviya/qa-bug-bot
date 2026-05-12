@@ -1,12 +1,54 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { OpenRouter } from '@openrouter/sdk';
 import { verifyToken } from '@clerk/backend';
-import {
-  OPENROUTER_MODEL,
-  MAX_INPUT_LENGTH,
-  BUG_REPORT_SCHEMA,
-  BDD_SCENARIO_SCHEMA,
-} from './schemas';
+
+// ─── Inlined constants (no separate import — avoids ESM extension issues on Vercel) ──
+const OPENROUTER_MODEL = 'openai/gpt-5.2';
+const MAX_INPUT_LENGTH = 5000;
+
+const BUG_REPORT_SCHEMA = {
+  name: 'bug_report',
+  strict: true,
+  schema: {
+    type: 'object' as const,
+    properties: {
+      summary: { type: 'string' },
+      stepsToReproduce: { type: 'array', items: { type: 'string' } },
+      expectedResult: { type: 'string' },
+      actualResult: { type: 'string' },
+      severity: { type: 'string', enum: ['Low', 'Medium', 'High', 'Critical'] },
+      category: { type: 'string' },
+    },
+    required: ['summary', 'stepsToReproduce', 'expectedResult', 'actualResult', 'severity', 'category'],
+    additionalProperties: false,
+  },
+};
+
+const BDD_SCENARIO_SCHEMA = {
+  name: 'bdd_scenario',
+  strict: true,
+  schema: {
+    type: 'object' as const,
+    properties: {
+      feature: { type: 'string', description: 'The high-level feature name.' },
+      scenario: { type: 'string', description: 'The specific scenario being tested.' },
+      steps: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            keyword: { type: 'string', enum: ['Given', 'When', 'Then', 'And'] },
+            text: { type: 'string' },
+          },
+          required: ['keyword', 'text'],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ['feature', 'scenario', 'steps'],
+    additionalProperties: false,
+  },
+};
 
 // ─── Singleton OpenRouter client (reused across warm invocations) ────────────
 let _client: OpenRouter | null = null;
