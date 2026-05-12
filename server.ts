@@ -17,7 +17,7 @@ import {
   MAX_INPUT_LENGTH,
   BUG_REPORT_SCHEMA,
   BDD_SCENARIO_SCHEMA,
-} from './shared/schemas';
+} from './api/schemas';
 
 dotenv.config({ path: '.env.local' });
 

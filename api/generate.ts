@@ -6,7 +6,7 @@ import {
   MAX_INPUT_LENGTH,
   BUG_REPORT_SCHEMA,
   BDD_SCENARIO_SCHEMA,
-} from '../shared/schemas';
+} from './schemas';
 
 // ─── Singleton OpenRouter client (reused across warm invocations) ────────────
 let _client: OpenRouter | null = null;
