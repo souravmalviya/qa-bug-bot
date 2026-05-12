@@ -104,7 +104,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     res.setHeader('Access-Control-Allow-Origin', origin);
   }
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   res.setHeader('Cache-Control', 'no-store');
   res.removeHeader('X-Powered-By');
 
@@ -114,13 +114,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   // ── Auth — verify Clerk session token ──
+  const clerkSecretKey = process.env.CLERK_SECRET_KEY;
+  if (!clerkSecretKey) {
+    console.error('CLERK_SECRET_KEY is not configured in environment variables.');
+    return res.status(500).json({ error: 'Server configuration error. Please contact the administrator.' });
+  }
+
   const authHeader = req.headers.authorization ?? '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
   if (!token) {
     return res.status(401).json({ error: 'Authentication required. Please sign in.' });
   }
   try {
-    await verifyToken(token, { secretKey: process.env.CLERK_SECRET_KEY });
+    await verifyToken(token, { secretKey: clerkSecretKey });
   } catch {
     return res.status(401).json({ error: 'Your session has expired. Please sign in again.' });
   }
