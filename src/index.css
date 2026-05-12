@@ -64,6 +64,46 @@ main {
     animation: fadeIn 0.3s ease-out;
 }
 
+/* ─── Clerk Auth Overrides ────────────────────────────────────────────────── */
+/* Use [class*="cl-"] attribute selectors — robust against Clerk version changes */
+
+/* Flatten Clerk's card: remove shadow, border, radius but KEEP internal padding */
+.clerk-form-container [class*="cl-card"] {
+  box-shadow: none !important;
+  border: none !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  margin: 0 !important;
+  width: 100% !important;
+}
+
+.clerk-form-container [class*="cl-rootBox"] {
+  width: 100% !important;
+}
+
+/* Hide Clerk's built-in header and footer — we have our own */
+.clerk-form-container [class*="cl-header"] {
+  display: none !important;
+}
+
+.clerk-form-container [class*="cl-footer"] {
+  display: none !important;
+}
+
+/* Ensure form fields have consistent spacing */
+.clerk-form-container [class*="cl-formFieldRow"] {
+  margin-bottom: 1rem !important;
+}
+
+.clerk-form-container [class*="cl-formFieldLabel"] {
+  margin-bottom: 0.375rem !important;
+  font-weight: 500 !important;
+}
+
+.clerk-form-container [class*="cl-formFieldInput"] {
+  padding: 0.625rem 0.875rem !important;
+}
+
 /* ─── Scrollbar ───────────────────────────────────────────────────────────── */
 ::-webkit-scrollbar {
     width: 6px;

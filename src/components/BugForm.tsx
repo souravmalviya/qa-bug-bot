@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
+import { useAuth } from '@clerk/react';
 import { BugReport } from '../types';
 import { generateBugReport } from '../services/aiService';
 
 const BugForm: React.FC = () => {
+  const { getToken } = useAuth();
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [result, setResult] = useState<BugReport | null>(null);
@@ -15,10 +17,10 @@ const BugForm: React.FC = () => {
     setIsLoading(true);
     setError(null);
     try {
-      const report = await generateBugReport(input);
+      const report = await generateBugReport(input, getToken);
       setResult(report);
-    } catch (err: any) {
-      setError(err?.message || "Failed to generate bug report. Please try again.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to generate bug report. Please try again.");
     } finally {
       setIsLoading(false);
     }

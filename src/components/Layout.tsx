@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Analytics } from "@vercel/analytics/react";
+import { UserButton, useUser } from '@clerk/react';
 import { ViewState } from '../types';
 
 interface LayoutProps {
@@ -11,6 +12,7 @@ interface LayoutProps {
 const Layout: React.FC<LayoutProps> = ({ children, onNavigate, currentView }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const { user } = useUser();
 
   // Close mobile menu on outside click
   useEffect(() => {
@@ -86,6 +88,28 @@ const Layout: React.FC<LayoutProps> = ({ children, onNavigate, currentView }) =>
               >
                 Bug Creator
               </button>
+
+              {/* Divider */}
+              <div className="w-px h-6 bg-gray-200 mx-1" />
+
+              {/* User info + Clerk UserButton */}
+              <div className="flex items-center gap-2.5">
+                {user?.firstName && (
+                  <span className="text-sm text-slate-500 font-medium hidden lg:block">
+                    Hi, {user.firstName}
+                  </span>
+                )}
+                <UserButton
+                  appearance={{
+                    elements: {
+                      avatarBox: 'w-8 h-8 ring-2 ring-green-200 hover:ring-green-400 transition-all',
+                      userButtonPopoverCard: 'shadow-xl border border-gray-100',
+                      userButtonPopoverActionButton: 'hover:bg-green-50 hover:text-green-700',
+                      userButtonPopoverActionButtonText: 'font-medium',
+                    },
+                  }}
+                />
+              </div>
             </div>
 
             {/* Hamburger button — mobile only */}
@@ -143,6 +167,25 @@ const Layout: React.FC<LayoutProps> = ({ children, onNavigate, currentView }) =>
               </svg>
               Bug Creator
             </button>
+
+            {/* Mobile user section */}
+            <div className="pt-2 mt-2 border-t border-gray-100 flex items-center gap-3 px-4 py-3">
+              <UserButton
+                appearance={{
+                  elements: {
+                    avatarBox: 'w-8 h-8 ring-2 ring-green-200',
+                  },
+                }}
+              />
+              <div className="flex flex-col">
+                {user?.fullName && (
+                  <span className="text-sm font-semibold text-[#0F172A]">{user.fullName}</span>
+                )}
+                {user?.primaryEmailAddress && (
+                  <span className="text-xs text-slate-400">{user.primaryEmailAddress.emailAddress}</span>
+                )}
+              </div>
+            </div>
           </div>
         </div>
       </nav>

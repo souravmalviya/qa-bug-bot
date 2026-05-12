@@ -1,10 +1,14 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { OpenRouter } from '@openrouter/sdk';
+import { verifyToken } from '@clerk/backend';
+import {
+  OPENROUTER_MODEL,
+  MAX_INPUT_LENGTH,
+  BUG_REPORT_SCHEMA,
+  BDD_SCENARIO_SCHEMA,
+} from '../shared/schemas';
 
-// ─── Constants ───────────────────────────────────────────────────────────────
-const OPENROUTER_MODEL = 'openai/gpt-5.2';
-
-// ─── Singleton OpenRouter client (reused across requests in the same instance) ─
+// ─── Singleton OpenRouter client (reused across warm invocations) ────────────
 let _client: OpenRouter | null = null;
 function getClient(): OpenRouter {
   if (!_client) {
@@ -86,52 +90,6 @@ async function callWithRetry<T>(
   }
 }
 
-// ─── JSON Schema definitions for structured output ──────────────────────────
-
-const BUG_REPORT_SCHEMA = {
-  name: 'bug_report',
-  strict: true,
-  schema: {
-    type: 'object' as const,
-    properties: {
-      summary: { type: 'string' },
-      stepsToReproduce: { type: 'array', items: { type: 'string' } },
-      expectedResult: { type: 'string' },
-      actualResult: { type: 'string' },
-      severity: { type: 'string', enum: ['Low', 'Medium', 'High', 'Critical'] },
-      category: { type: 'string' },
-    },
-    required: ['summary', 'stepsToReproduce', 'expectedResult', 'actualResult', 'severity', 'category'],
-    additionalProperties: false,
-  },
-};
-
-const BDD_SCENARIO_SCHEMA = {
-  name: 'bdd_scenario',
-  strict: true,
-  schema: {
-    type: 'object' as const,
-    properties: {
-      feature: { type: 'string', description: 'The high-level feature name.' },
-      scenario: { type: 'string', description: 'The specific scenario being tested.' },
-      steps: {
-        type: 'array',
-        items: {
-          type: 'object',
-          properties: {
-            keyword: { type: 'string', enum: ['Given', 'When', 'Then', 'And'] },
-            text: { type: 'string' },
-          },
-          required: ['keyword', 'text'],
-          additionalProperties: false,
-        },
-      },
-    },
-    required: ['feature', 'scenario', 'steps'],
-    additionalProperties: false,
-  },
-};
-
 // ─── Vercel Handler ──────────────────────────────────────────────────────────
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -155,6 +113,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(405).json({ error: 'Method not allowed. Use POST.' });
   }
 
+  // ── Auth — verify Clerk session token ──
+  const authHeader = req.headers.authorization ?? '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+  if (!token) {
+    return res.status(401).json({ error: 'Authentication required. Please sign in.' });
+  }
+  try {
+    await verifyToken(token, { secretKey: process.env.CLERK_SECRET_KEY });
+  } catch {
+    return res.status(401).json({ error: 'Your session has expired. Please sign in again.' });
+  }
+
   const requestId = crypto.randomUUID().slice(0, 8);
   const timestamp = new Date().toISOString();
 
@@ -165,8 +135,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!action || !input) {
       return res.status(400).json({ error: 'Missing required fields: action and input.' });
     }
-    if (typeof input !== 'string' || input.length > 5000) {
-      return res.status(400).json({ error: 'Input must be a string of at most 5 000 characters.' });
+    if (typeof input !== 'string' || input.length > MAX_INPUT_LENGTH) {
+      return res.status(400).json({ error: `Input must be a string of at most ${MAX_INPUT_LENGTH} characters.` });
     }
     if (!['bug-report', 'bdd-steps'].includes(action)) {
       return res.status(400).json({ error: `Unknown action: "${action}". Use "bug-report" or "bdd-steps".` });
@@ -202,8 +172,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       );
 
       const content = (response as any).choices?.[0]?.message?.content ?? '';
-      console.log(`[${timestamp}] Bug report generated OK`);
-      return res.status(200).send(content);
+      console.log(`[${requestId}] Bug report generated OK`);
+      try {
+        return res.status(200).json(JSON.parse(content));
+      } catch {
+        return res.status(500).json({ error: 'AI returned an invalid response. Please try again.' });
+      }
     }
 
     // ── BDD scenario generation ──
@@ -233,8 +207,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       );
 
       const content = (response as any).choices?.[0]?.message?.content ?? '';
-      console.log(`[${timestamp}] BDD scenario generated OK`);
-      return res.status(200).send(content);
+      console.log(`[${requestId}] BDD scenario generated OK`);
+      try {
+        return res.status(200).json(JSON.parse(content));
+      } catch {
+        return res.status(500).json({ error: 'AI returned an invalid response. Please try again.' });
+      }
     }
   } catch (err: any) {
     console.error(`[${timestamp}] ERROR`, {

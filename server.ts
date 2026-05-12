@@ -1,10 +1,9 @@
 /**
  * Local development API server
- * 
- * This is a lightweight Express server that mimics Vercel's serverless
- * function routing for local development. It loads your OpenRouter API key
- * from .env.local and serves the /api/generate endpoint.
- * 
+ *
+ * Mimics Vercel's serverless function routing for local development.
+ * Loads the OpenRouter API key from .env.local and serves /api/generate.
+ *
  * Usage: npm run dev
  * (runs this server on port 3001 + Vite on port 3000 concurrently)
  */
@@ -12,66 +11,55 @@
 import express from 'express';
 import dotenv from 'dotenv';
 import { OpenRouter } from '@openrouter/sdk';
+import { verifyToken } from '@clerk/backend';
+import {
+  OPENROUTER_MODEL,
+  MAX_INPUT_LENGTH,
+  BUG_REPORT_SCHEMA,
+  BDD_SCENARIO_SCHEMA,
+} from './shared/schemas';
 
-// Load .env.local
 dotenv.config({ path: '.env.local' });
 
 const app = express();
 app.use(express.json());
 
-const OPENROUTER_MODEL = 'openai/gpt-5.2';
 const PORT = 3001;
 
-// ─── JSON Schema definitions ────────────────────────────────────────────────
-
-const BUG_REPORT_SCHEMA = {
-  name: 'bug_report',
-  strict: true,
-  schema: {
-    type: 'object' as const,
-    properties: {
-      summary: { type: 'string' },
-      stepsToReproduce: { type: 'array', items: { type: 'string' } },
-      expectedResult: { type: 'string' },
-      actualResult: { type: 'string' },
-      severity: { type: 'string', enum: ['Low', 'Medium', 'High', 'Critical'] },
-      category: { type: 'string' },
-    },
-    required: ['summary', 'stepsToReproduce', 'expectedResult', 'actualResult', 'severity', 'category'],
-    additionalProperties: false,
-  },
-};
-
-const BDD_SCENARIO_SCHEMA = {
-  name: 'bdd_scenario',
-  strict: true,
-  schema: {
-    type: 'object' as const,
-    properties: {
-      feature: { type: 'string' },
-      scenario: { type: 'string' },
-      steps: {
-        type: 'array',
-        items: {
-          type: 'object',
-          properties: {
-            keyword: { type: 'string', enum: ['Given', 'When', 'Then', 'And'] },
-            text: { type: 'string' },
-          },
-          required: ['keyword', 'text'],
-          additionalProperties: false,
-        },
-      },
-    },
-    required: ['feature', 'scenario', 'steps'],
-    additionalProperties: false,
-  },
-};
+// ─── Singleton client ────────────────────────────────────────────────────────
+let _client: OpenRouter | null = null;
+function getClient(): OpenRouter {
+  if (!_client) {
+    const apiKey = process.env.OPENROUTER_API_KEY;
+    if (!apiKey) {
+      throw new Error('OPENROUTER_API_KEY not set. Create a .env.local file with: OPENROUTER_API_KEY=your_key_here');
+    }
+    _client = new OpenRouter({ apiKey });
+  }
+  return _client;
+}
 
 // ─── API Route ──────────────────────────────────────────────────────────────
 
 app.post('/api/generate', async (req, res) => {
   const timestamp = new Date().toISOString();
+
+  // ── Auth — verify Clerk session token ──
+  const authHeader = (req.headers.authorization as string) ?? '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+  if (!token) {
+    return res.status(401).json({ error: 'Authentication required. Please sign in.' });
+  }
+  const clerkSecretKey = process.env.CLERK_SECRET_KEY;
+  if (!clerkSecretKey) {
+    console.warn(`[${timestamp}] ⚠️  CLERK_SECRET_KEY not set — skipping token verification in dev`);
+  } else {
+    try {
+      await verifyToken(token, { secretKey: clerkSecretKey });
+    } catch {
+      return res.status(401).json({ error: 'Your session has expired. Please sign in again.' });
+    }
+  }
 
   try {
     const { action, input } = req.body || {};
@@ -82,24 +70,15 @@ app.post('/api/generate', async (req, res) => {
       return res.status(400).json({ error: 'Missing required fields: action and input' });
     }
 
-    if (typeof input !== 'string' || input.length > 5000) {
-      return res.status(400).json({ error: 'Input must be a string of max 5000 characters' });
+    if (typeof input !== 'string' || input.length > MAX_INPUT_LENGTH) {
+      return res.status(400).json({ error: `Input must be a string of at most ${MAX_INPUT_LENGTH} characters` });
     }
 
     if (!['bug-report', 'bdd-steps'].includes(action)) {
       return res.status(400).json({ error: `Unknown action: ${action}` });
     }
 
-    const apiKey = process.env.OPENROUTER_API_KEY;
-    if (!apiKey) {
-      console.error(`[${timestamp}] ❌ OPENROUTER_API_KEY not found in .env.local`);
-      return res.status(500).json({ 
-        error: 'OPENROUTER_API_KEY not set. Create a .env.local file with: OPENROUTER_API_KEY=your_key_here' 
-      });
-    }
-
-    console.log(`[${timestamp}] Using key: ${apiKey.substring(0, 10)}...`);
-    const client = new OpenRouter({ apiKey });
+    const client = getClient();
 
     if (action === 'bug-report') {
       console.log(`[${timestamp}] 🐛 Generating bug report...`);
@@ -126,7 +105,11 @@ app.post('/api/generate', async (req, res) => {
       });
       const content = (response as any).choices?.[0]?.message?.content ?? '';
       console.log(`[${timestamp}] ✅ Bug report generated`);
-      return res.send(content);
+      try {
+        return res.json(JSON.parse(content));
+      } catch {
+        return res.status(500).json({ error: 'AI returned an invalid response. Please try again.' });
+      }
     }
 
     if (action === 'bdd-steps') {
@@ -154,36 +137,41 @@ app.post('/api/generate', async (req, res) => {
       });
       const content = (response as any).choices?.[0]?.message?.content ?? '';
       console.log(`[${timestamp}] ✅ BDD scenario generated`);
-      return res.send(content);
+      try {
+        return res.json(JSON.parse(content));
+      } catch {
+        return res.status(500).json({ error: 'AI returned an invalid response. Please try again.' });
+      }
     }
   } catch (err: any) {
     console.error(`[${timestamp}] ❌ Error:`, err.message);
 
+    if (err.message?.includes('OPENROUTER_API_KEY not set')) {
+      return res.status(500).json({ error: err.message });
+    }
+
     if (err.status === 429 || err.message?.includes('rate limit')) {
       return res.status(429).json({
         error: 'API rate limit reached. Please wait a moment and try again.',
-        details: err.message,
       });
     }
 
     if (err.status === 401 || err.status === 403 || err.message?.includes('API key')) {
       return res.status(500).json({
         error: 'Invalid OpenRouter API key. Check your .env.local file.',
-        details: err.message,
       });
     }
 
     return res.status(500).json({
       error: 'Failed to generate content',
-      details: err.message || 'Unknown error',
     });
   }
 });
 
 // Health check
 app.get('/api/health', (_req, res) => {
-  res.json({ 
-    status: 'ok', 
+  res.json({
+    status: 'ok',
     hasApiKey: !!process.env.OPENROUTER_API_KEY,
     model: OPENROUTER_MODEL,
   });
@@ -195,7 +183,7 @@ const server = app.listen(PORT, '127.0.0.1', () => {
   console.log(`   API key loaded: ${process.env.OPENROUTER_API_KEY ? '✅ Yes' : '❌ No (check .env.local)'}\n`);
 });
 
-['SIGINT', 'SIGTERM'].forEach(signal => {
+['SIGINT', 'SIGTERM'].forEach((signal) => {
   process.on(signal, () => {
     server.close(() => process.exit(0));
   });

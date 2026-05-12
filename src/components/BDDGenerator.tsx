@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
+import { useAuth } from '@clerk/react';
 import { BDDScenario } from '../types';
 import { generateBDDSteps } from '../services/aiService';
 
 const BDDGenerator: React.FC = () => {
+  const { getToken } = useAuth();
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [result, setResult] = useState<BDDScenario | null>(null);
@@ -15,10 +17,10 @@ const BDDGenerator: React.FC = () => {
     setIsLoading(true);
     setError(null);
     try {
-      const bdd = await generateBDDSteps(input);
+      const bdd = await generateBDDSteps(input, getToken);
       setResult(bdd);
-    } catch (err: any) {
-      setError(err?.message || "Failed to generate BDD steps. Please try again.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to generate BDD steps. Please try again.");
     } finally {
       setIsLoading(false);
     }
@@ -55,7 +57,7 @@ const BDDGenerator: React.FC = () => {
               <div className="flex gap-4 pt-4">
                 <button
                   type="button"
-                  onClick={() => setInput('')}
+                  onClick={() => { setInput(''); setResult(null); setError(null); }}
                   className="flex-1 py-4 px-6 rounded-2xl font-bold text-slate-500 bg-slate-50 hover:bg-slate-100 transition-all active:scale-[0.98]"
                 >
                   Clear
